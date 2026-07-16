@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TARNISHED SKIES — Ride of the Drake</title>
+<style>
+  html, body { margin:0; padding:0; overflow:hidden; background:#000; height:100%; font-family: Georgia, 'Times New Roman', serif; }
+  #hud { position:fixed; inset:0; pointer-events:none; color:#d8c37a; }
+  .gold { color:#d8c37a; text-shadow: 0 0 8px rgba(216,195,122,.45), 0 2px 4px #000; }
+
+  #startScreen {
+    position:fixed; inset:0; background:radial-gradient(ellipse at center, #14120c 0%, #000 75%);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:20;
+    transition:opacity 1.2s ease;
+  }
+  #startScreen h1 { font-size:56px; letter-spacing:14px; font-weight:normal; margin:0 0 10px 0; }
+  #startScreen h2 { font-size:16px; letter-spacing:6px; font-weight:normal; opacity:.8; margin:0 0 50px 0; font-style:italic; }
+  #startScreen .prompt { font-size:20px; letter-spacing:4px; animation:pulse 2.2s infinite; }
+  #startScreen .controls { margin-top:56px; font-size:14px; letter-spacing:2px; opacity:.75; line-height:2; text-align:center; }
+  @keyframes pulse { 0%,100%{opacity:.35} 50%{opacity:1} }
+
+  #objective { position:fixed; top:24px; left:28px; font-size:17px; letter-spacing:2px; }
+  #objective .sub { font-size:13px; opacity:.7; margin-top:4px; }
+  #compass { position:fixed; top:26px; left:50%; transform:translateX(-50%); font-size:26px; transition:none; }
+  #flightData { position:fixed; bottom:22px; right:30px; text-align:right; font-size:14px; letter-spacing:2px; opacity:.85; }
+  #hint { position:fixed; bottom:22px; left:30px; font-size:13px; letter-spacing:2px; opacity:.6; line-height:1.9; }
+
+  #message {
+    position:fixed; top:34%; left:0; right:0; text-align:center;
+    font-size:40px; letter-spacing:10px; opacity:0; transition:opacity .8s ease;
+  }
+  #message .bar { display:block; margin:14px auto 0; width:420px; height:1px;
+    background:linear-gradient(90deg, transparent, #d8c37a, transparent); }
+
+  #victory {
+    position:fixed; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.45); z-index:15;
+  }
+  #victory h1 { font-size:52px; letter-spacing:12px; font-weight:normal; margin:0; }
+  #victory p { font-size:16px; letter-spacing:4px; opacity:.8; }
+
+  #vignette { position:fixed; inset:0; pointer-events:none;
+    background:radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.55) 100%); }
+  #boostFx { position:fixed; inset:0; pointer-events:none; opacity:0; transition:opacity .3s;
+    background:radial-gradient(ellipse at center, transparent 40%, rgba(255,170,60,.10) 100%); }
+</style>
+</head>
+<body>
+<div id="vignette"></div>
+<div id="boostFx"></div>
+<div id="hud">
+  <div id="objective" class="gold"></div>
+  <div id="compass" class="gold">◆</div>
+  <div id="flightData" class="gold"></div>
+  <div id="hint" class="gold">
+    W / S — dive / climb &nbsp;·&nbsp; A / D — turn<br>
+    SHIFT — surge &nbsp;·&nbsp; SPACE — dragonfire &nbsp;·&nbsp; E — land / take wing
+  </div>
+  <div id="message" class="gold"><span id="messageText"></span><span class="bar"></span></div>
+</div>
+
+<div id="victory">
+  <h1 class="gold">THE BEACONS ARE REKINDLED</h1>
+  <p class="gold">Well done, Tarnished. The skies remember thy flame.</p>
+  <p class="gold" style="opacity:.55; font-size:13px;">Thou mayest fly on, shouldst thou wish it.</p>
+</div>
+
+<div id="startScreen">
+  <h1 class="gold">TARNISHED SKIES</h1>
+  <h2 class="gold">Ride of the Ancient Drake</h2>
+  <div class="prompt gold">— PRESS ENTER TO TAKE WING —</div>
+  <div class="controls gold">
+    Rekindle the five sleeping beacons with dragonfire.<br>
+    Golden pillars of light mark those that yet sleep.
+  </div>
+</div>
+
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script>
+'use strict';
+// test harness: with ?test=1 the pending frame callback is exposed so an
+// automated test can pump frames manually while the tab is hidden
+if (new URLSearchParams(location.search).has('test')) {
+  const _raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = cb => { window.__rafCb = cb; return _raf(cb); };
+}
+if (typeof THREE === 'undefined') {
+  document.getElementById('startScreen').innerHTML =
+    '<h1 class="gold" style="font-size:24px">Could not load the Three.js library.<br>An internet connection is required on first load.</h1>';
+  throw new Error('THREE failed to load');
+}
+
+// ---------- Core setup ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0f16);
+scene.fog = new THREE.FogExp2(0x141420, 0.00085);
+
+const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 6000);
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = false;
+document.body.appendChild(renderer.domElement);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- Lights ----------
+scene.add(new THREE.HemisphereLight(0x4a5378, 0x1c1a16, 1.25));
+const moon = new THREE.DirectionalLight(0x93a8d4, 1.0);
+moon.position.set(-400, 600, -200);
+scene.add(moon);
+const erdGlow = new THREE.PointLight(0xf5c86a, 1.6, 3000, 1.2);
+erdGlow.position.set(0, 420, -1300);
+scene.add(erdGlow);
+
+// ---------- Terrain ----------
+function terrainH(x, z) {
+  return 20*Math.sin(x*0.004)*Math.cos(z*0.005)
+       + 12*Math.sin(x*0.011+1.7)*Math.sin(z*0.008+0.4)
+       + 5*Math.sin(x*0.03)*Math.cos(z*0.026)
+       + 30*Math.sin(x*0.0016+2.1)*Math.sin(z*0.0019);
+}
+{
+  const size = 4200, seg = 150;
+  const geo = new THREE.PlaneGeometry(size, size, seg, seg);
+  geo.rotateX(-Math.PI/2);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count*3);
+  const cLow = new THREE.Color(0x1d241c), cHigh = new THREE.Color(0x3a3a38);
+  const tmp = new THREE.Color();
+  for (let i=0; i<pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const h = terrainH(x, z);
+    pos.setY(i, h);
+    tmp.copy(cLow).lerp(cHigh, Math.min(1, Math.max(0, (h+20)/85)));
+    colors[i*3]=tmp.r; colors[i*3+1]=tmp.g; colors[i*3+2]=tmp.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:1, metalness:0 });
+  scene.add(new THREE.Mesh(geo, mat));
+}
+
+// ---------- The Erdtree (distant golden tree) ----------
+{
+  const tree = new THREE.Group();
+  const trunkMat = new THREE.MeshStandardMaterial({ color:0xcfae62, emissive:0x8a6a20, emissiveIntensity:.7, roughness:.8 });
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(18, 42, 480, 10), trunkMat);
+  trunk.position.y = 240;
+  tree.add(trunk);
+  const canopyMat = new THREE.MeshBasicMaterial({ color:0xf7d573, transparent:true, opacity:.9, fog:false });
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(230, 20, 16), canopyMat);
+  canopy.scale.y = 0.72; canopy.position.y = 540;
+  tree.add(canopy);
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(310, 20, 16),
+    new THREE.MeshBasicMaterial({ color:0xf3c95e, transparent:true, opacity:.16, blending:THREE.AdditiveBlending, depthWrite:false, fog:false }));
+  halo.scale.y = 0.75; halo.position.y = 540;
+  tree.add(halo);
+  tree.position.set(0, terrainH(0,-1300)-10, -1300);
+  scene.add(tree);
+}
+
+// ---------- Stars & drifting embers ----------
+{
+  const g = new THREE.BufferGeometry();
+  const n = 900, arr = new Float32Array(n*3);
+  for (let i=0;i<n;i++){
+    const th = Math.random()*Math.PI*2, ph = Math.random()*Math.PI*0.45;
+    const r = 4500;
+    arr[i*3]   = r*Math.sin(ph)*Math.cos(th);
+    arr[i*3+1] = r*Math.cos(ph)*0.8 + 200;
+    arr[i*3+2] = r*Math.sin(ph)*Math.sin(th);
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(arr,3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color:0xbfc8e8, size:3.4, sizeAttenuation:false, fog:false })));
+}
+const embers = (() => {
+  const n = 260, g = new THREE.BufferGeometry();
+  const arr = new Float32Array(n*3), vel = [];
+  for (let i=0;i<n;i++){
+    arr[i*3]=(Math.random()-0.5)*3000; arr[i*3+1]=Math.random()*260+10; arr[i*3+2]=(Math.random()-0.5)*3000;
+    vel.push(2+Math.random()*5);
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(arr,3));
+  const p = new THREE.Points(g, new THREE.PointsMaterial({ color:0xffb35c, size:2.6, transparent:true, opacity:.8, blending:THREE.AdditiveBlending, depthWrite:false }));
+  scene.add(p);
+  return { g, vel, n };
+})();
+
+// ---------- Ruins ----------
+const stoneMat = new THREE.MeshStandardMaterial({ color:0x4a4a50, roughness:.95 });
+function addRuin(x, z, r, h) {
+  const base = terrainH(x, z);
+  const tower = new THREE.Mesh(new THREE.CylinderGeometry(r*.8, r, h, 8), stoneMat);
+  tower.position.set(x, base + h/2 - 4, z);
+  scene.add(tower);
+  return base + h - 4;
+}
+const ruinSpots = [[380,220,9,55],[-520,-340,11,70],[720,-660,8,45],[-260,600,10,62],[150,-980,12,80],
+                   [-880,180,9,50],[980,420,10,66],[-620,-940,8,42],[420,880,11,58],[-1050,-520,10,72]];
+for (const [x,z,r,h] of ruinSpots) addRuin(x,z,r,h);
+
+// ---------- Beacons (the goals) ----------
+const beacons = [];
+const beaconDefs = [[260,-420],[-540,120],[640,340],[-380,-780],[880,-180]];
+for (const [x,z] of beaconDefs) {
+  const top = addRuin(x, z, 13, 95);
+  const grp = new THREE.Group();
+  grp.position.set(x, top, z);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(9, 5, 6, 10), stoneMat);
+  bowl.position.y = 3; grp.add(bowl);
+  const coals = new THREE.Mesh(new THREE.SphereGeometry(6.4, 14, 10),
+    new THREE.MeshStandardMaterial({ color:0x22201c, emissive:0x000000, roughness:1 }));
+  coals.position.y = 6; coals.scale.y = .55; grp.add(coals);
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 520, 8, 1, true),
+    new THREE.MeshBasicMaterial({ color:0xf3cd6e, transparent:true, opacity:.33, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide, fog:false }));
+  beam.position.y = 262; grp.add(beam);
+  const flame = new THREE.Mesh(new THREE.SphereGeometry(5.5, 12, 10),
+    new THREE.MeshBasicMaterial({ color:0xff8f2e, transparent:true, opacity:.95, blending:THREE.AdditiveBlending, depthWrite:false }));
+  flame.position.y = 9; flame.visible = false; grp.add(flame);
+  const light = new THREE.PointLight(0xff9636, 0, 380, 1.4);
+  light.position.y = 12; grp.add(light);
+  scene.add(grp);
+  beacons.push({ grp, coals, beam, flame, light, lit:false, heat:0, pos:new THREE.Vector3(x, top+8, z) });
+}
+
+// ---------- The Dragon ----------
+const dragon = new THREE.Group();
+dragon.rotation.order = 'YXZ';
+scene.add(dragon);
+
+const scaleMat = new THREE.MeshStandardMaterial({ color:0x3b2724, roughness:.75, metalness:.15 });
+const hornMat  = new THREE.MeshStandardMaterial({ color:0xd9c690, roughness:.5 });
+const membraneMat = new THREE.MeshStandardMaterial({ color:0x59302a, roughness:.9, side:THREE.DoubleSide, transparent:true, opacity:.94 });
+
+{ // body
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(2.1, 7, 6, 12), scaleMat);
+  body.rotation.x = Math.PI/2;
+  dragon.add(body);
+  for (let i=0;i<6;i++) { // spine ridges
+    const s = new THREE.Mesh(new THREE.ConeGeometry(.4, 1.3, 5), hornMat);
+    s.position.set(0, 2.1, -3.2 + i*1.4);
+    dragon.add(s);
+  }
+}
+const neck = [];
+{ // neck & head — visible ahead of the rider
+  let py=0.9, pz=-5;
+  for (let i=0;i<4;i++){
+    const seg = new THREE.Mesh(new THREE.SphereGeometry(1.6 - i*0.22, 10, 8), scaleMat);
+    py += 0.75; pz -= 2.1;
+    seg.position.set(0, py, pz);
+    dragon.add(seg); neck.push(seg);
+  }
+  const head = new THREE.Group();
+  head.position.set(0, py+0.6, pz-2.2);
+  const skull = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.5, 3.4), scaleMat);
+  head.add(skull);
+  const snout = new THREE.Mesh(new THREE.BoxGeometry(1.1, .9, 1.8), scaleMat);
+  snout.position.set(0, -0.25, -2.3); head.add(snout);
+  for (const sx of [-1,1]) {
+    const horn = new THREE.Mesh(new THREE.ConeGeometry(.3, 2.4, 6), hornMat);
+    horn.position.set(sx*0.8, 0.9, 1.2); horn.rotation.x = -0.9; head.add(horn);
+    const eye = new THREE.Mesh(new THREE.SphereGeometry(.22, 8, 6),
+      new THREE.MeshBasicMaterial({ color:0xffb040 }));
+    eye.position.set(sx*0.75, 0.3, -1.2); head.add(eye);
+  }
+  dragon.add(head);
+  neck.head = head;
+}
+{ // tail
+  let pz = 5;
+  for (let i=0;i<5;i++){
+    const seg = new THREE.Mesh(new THREE.SphereGeometry(1.5 - i*0.26, 9, 7), scaleMat);
+    pz += 1.9; seg.position.set(0, -0.1*i, pz);
+    dragon.add(seg);
+  }
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(.6, 2.6, 6), hornMat);
+  tip.position.set(0, -0.6, pz+2.2); tip.rotation.x = Math.PI/2; dragon.add(tip);
+}
+const wings = [];
+{ // wings
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0); shape.lineTo(9, 3); shape.lineTo(15.5, 1.2);
+  shape.lineTo(12.5, -2.4); shape.lineTo(5.5, -3.4); shape.lineTo(0, -1.6);
+  shape.closePath();
+  const wgeo = new THREE.ShapeGeometry(shape);
+  wgeo.rotateX(-Math.PI/2); // lie flat; +x = outward, shape-y maps to -z
+  for (const side of [-1, 1]) {
+    const w = new THREE.Group();
+    w.position.set(side*1.6, 1.1, -1.4);
+    const mesh = new THREE.Mesh(wgeo, membraneMat);
+    mesh.scale.x = side;
+    w.add(mesh);
+    const bone = new THREE.Mesh(new THREE.CylinderGeometry(.22,.3,9,6), scaleMat);
+    bone.rotation.z = side*Math.PI/2 - side*0.18; bone.position.set(side*4.4, .3, 0);
+    w.add(bone);
+    dragon.add(w);
+    wings.push({ grp:w, side });
+  }
+}
+// Rider (you) — barely visible at frame bottom, sells the POV
+{
+  const rider = new THREE.Group();
+  const cloak = new THREE.Mesh(new THREE.ConeGeometry(.75, 1.9, 8),
+    new THREE.MeshStandardMaterial({ color:0x2c2620, roughness:1 }));
+  cloak.position.y = .9; rider.add(cloak);
+  const hood = new THREE.Mesh(new THREE.SphereGeometry(.42, 8, 8),
+    new THREE.MeshStandardMaterial({ color:0x241f1a, roughness:1 }));
+  hood.position.y = 1.9; rider.add(hood);
+  rider.position.set(0, 2.0, -1.0);
+  dragon.add(rider);
+}
+// Camera rides on the dragon's back, just behind the rider
+dragon.add(camera);
+camera.position.set(0, 4.4, 4.6);
+camera.lookAt(new THREE.Vector3(0, 2.2, -30).add(dragon.position));
+camera.lookAt(dragon.localToWorld(new THREE.Vector3(0, 2.0, -40)));
+
+// ---------- Dragonfire particles ----------
+const FIRE_N = 420;
+const fire = { pts:null, pos:new Float32Array(FIRE_N*3), vel:[], life:new Float32Array(FIRE_N), next:0 };
+{
+  for (let i=0;i<FIRE_N;i++){ fire.vel.push(new THREE.Vector3()); fire.pos[i*3+1] = -9999; }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(fire.pos, 3));
+  const fc = document.createElement('canvas'); fc.width = fc.height = 64;
+  const fctx = fc.getContext('2d');
+  const grad = fctx.createRadialGradient(32,32,0,32,32,32);
+  grad.addColorStop(0, 'rgba(255,225,170,1)');
+  grad.addColorStop(0.35, 'rgba(255,150,50,0.85)');
+  grad.addColorStop(1, 'rgba(255,70,0,0)');
+  fctx.fillStyle = grad; fctx.fillRect(0,0,64,64);
+  const m = new THREE.PointsMaterial({ color:0xffb050, size:7, transparent:true, opacity:.8,
+    map:new THREE.CanvasTexture(fc), blending:THREE.AdditiveBlending, depthWrite:false });
+  fire.pts = new THREE.Points(g, m);
+  fire.pts.frustumCulled = false;
+  scene.add(fire.pts);
+}
+const fireLight = new THREE.PointLight(0xff8820, 0, 140, 1.6);
+scene.add(fireLight);
+
+// ---------- Game state ----------
+const state = {
+  started:false, landed:false, victory:false,
+  yaw:0, pitch:0, bank:0, speed:45, flap:0,
+  pos:new THREE.Vector3(0, terrainH(0,900)+90, 900),
+};
+dragon.position.copy(state.pos);
+state.yaw = Math.PI; // face the Erdtree... actually beacons; face -z? start facing world center
+state.yaw = 0;
+
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Enter' && !state.started) startGame();
+  if (e.code === 'KeyE') toggleLand();
+  if (['Space','ArrowUp','ArrowDown'].includes(e.code)) e.preventDefault();
+});
+addEventListener('keyup', e => keys[e.code] = false);
+
+function startGame() {
+  state.started = true;
+  const s = document.getElementById('startScreen');
+  s.style.opacity = 0;
+  setTimeout(() => s.style.display = 'none', 1300);
+  showMessage('REKINDLE THE FIVE BEACONS');
+}
+
+let msgTimer = null;
+function showMessage(txt, ms=3200) {
+  const box = document.getElementById('message');
+  document.getElementById('messageText').textContent = txt;
+  box.style.opacity = 1;
+  clearTimeout(msgTimer);
+  msgTimer = setTimeout(() => box.style.opacity = 0, ms);
+}
+
+function groundAt(x, z) { return terrainH(x, z); }
+
+function toggleLand() {
+  if (!state.started) return;
+  if (state.landed) {
+    state.landed = false;
+    state.speed = 30;
+    state.pos.y += 3;
+    showMessage('TAKE WING', 1600);
+  } else {
+    const g = groundAt(state.pos.x, state.pos.z);
+    if (state.pos.y - g < 26) {
+      state.landed = true;
+      state.speed = 0;
+      showMessage('THE DRAKE RESTS', 2000);
+    } else {
+      showMessage('TOO HIGH TO LAND — DIVE LOWER', 2000);
+    }
+  }
+}
+
+// ---------- Fire breathing ----------
+const _fwd = new THREE.Vector3(), _headW = new THREE.Vector3(), _toB = new THREE.Vector3();
+function forwardVec(out) {
+  out.set(0,0,-1).applyEuler(new THREE.Euler(state.pitch, state.yaw, 0, 'YXZ'));
+  return out;
+}
+function updateFire(dt, firing) {
+  if (firing) {
+    neck.head.getWorldPosition(_headW);
+    forwardVec(_fwd);
+    for (let s=0; s<4; s++) {
+      const i = fire.next; fire.next = (fire.next+1)%FIRE_N;
+      fire.pos[i*3]=_headW.x; fire.pos[i*3+1]=_headW.y; fire.pos[i*3+2]=_headW.z;
+      fire.vel[i].copy(_fwd).multiplyScalar(75 + Math.random()*20);
+      fire.vel[i].x += (Math.random()-.5)*24;
+      fire.vel[i].y += (Math.random()-.5)*24 + 4;
+      fire.vel[i].z += (Math.random()-.5)*24;
+      fire.life[i] = 0.65 + Math.random()*0.25;
+    }
+    fireLight.position.copy(_headW).addScaledVector(_fwd, 14);
+    fireLight.intensity = 3.2;
+    // heat up beacons in the cone ahead
+    for (const b of beacons) {
+      if (b.lit) continue;
+      _toB.copy(b.pos).sub(_headW);
+      const d = _toB.length();
+      if (d < 85 && _toB.normalize().dot(_fwd) > 0.72) {
+        b.heat += dt;
+        if (b.heat > 0.35) lightBeacon(b);
+      }
+    }
+  } else {
+    fireLight.intensity = Math.max(0, fireLight.intensity - dt*14);
+  }
+  for (let i=0;i<FIRE_N;i++){
+    if (fire.life[i] <= 0) continue;
+    fire.life[i] -= dt;
+    if (fire.life[i] <= 0) { fire.pos[i*3+1] = -9999; continue; }
+    fire.pos[i*3]   += fire.vel[i].x*dt;
+    fire.pos[i*3+1] += fire.vel[i].y*dt;
+    fire.pos[i*3+2] += fire.vel[i].z*dt;
+  }
+  fire.pts.geometry.attributes.position.needsUpdate = true;
+}
+
+let litCount = 0;
+function lightBeacon(b) {
+  b.lit = true; litCount++;
+  b.beam.material.color.set(0xff7a22);
+  b.beam.material.opacity = 0.2;
+  b.beam.scale.set(.55, 1, .55);
+  b.flame.visible = true;
+  b.light.intensity = 2.8;
+  b.coals.material.emissive.set(0xff5a10);
+  b.coals.material.emissiveIntensity = 1.2;
+  if (litCount >= beacons.length) {
+    state.victory = true;
+    showMessage('');
+    document.getElementById('victory').style.display = 'flex';
+    setTimeout(() => document.getElementById('victory').style.opacity = 1, 30);
+  } else {
+    showMessage('BEACON REKINDLED — ' + litCount + ' OF ' + beacons.length);
+  }
+}
+
+// ---------- HUD ----------
+const elObjective = document.getElementById('objective');
+const elCompass = document.getElementById('compass');
+const elFlight = document.getElementById('flightData');
+function updateHUD() {
+  if (state.victory) {
+    elObjective.innerHTML = 'BEACONS REKINDLED &nbsp;' + litCount + ' / ' + beacons.length;
+    elCompass.style.display = 'none';
+    return;
+  }
+  let nearest = null, nd = 1e9;
+  for (const b of beacons) if (!b.lit) {
+    const d = b.pos.distanceTo(state.pos);
+    if (d < nd) { nd = d; nearest = b; }
+  }
+  elObjective.innerHTML = 'BEACONS REKINDLED &nbsp;' + litCount + ' / ' + beacons.length +
+    '<div class="sub">nearest sleeping beacon — ' + Math.round(nd) + ' m</div>';
+  if (nearest) {
+    const bearing = Math.atan2(-(nearest.pos.x - state.pos.x), -(nearest.pos.z - state.pos.z));
+    let rel = bearing - state.yaw;
+    elCompass.style.transform = 'translateX(-50%) rotate(' + (-rel) + 'rad)';
+    elCompass.textContent = '⬆';
+  }
+  const alt = Math.max(0, Math.round(state.pos.y - groundAt(state.pos.x, state.pos.z)));
+  elFlight.innerHTML = (state.landed ? 'PERCHED' : Math.round(state.speed*2) + ' fpm') +
+    '<br>altitude ' + alt + ' m';
+}
+
+// ---------- Main loop ----------
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  if (state.started && !state.landed) {
+    // steering
+    const turnIn  = (keys['KeyA']||keys['ArrowLeft'] ? 1:0) - (keys['KeyD']||keys['ArrowRight'] ? 1:0);
+    const pitchIn = (keys['KeyS']||keys['ArrowDown'] ? 1:0) - (keys['KeyW']||keys['ArrowUp'] ? 1:0);
+    const boosting = !!(keys['ShiftLeft']||keys['ShiftRight']);
+
+    state.yaw += turnIn * 1.5 * dt * (boosting ? .8 : 1);
+    state.pitch += pitchIn * 1.35 * dt;
+    state.pitch = Math.max(-1.05, Math.min(0.75, state.pitch));
+    state.pitch *= (1 - 0.35*dt); // gentle self-leveling
+    state.bank += (turnIn * -0.55 - state.bank) * 4*dt;
+
+    // speed: boost + dive energy
+    forwardVec(_fwd);
+    const target = boosting ? 95 : 46;
+    state.speed += (target - state.speed) * 1.1 * dt;
+    state.speed += -_fwd.y * 30 * dt;             // dive = faster, climb = slower
+    state.speed = Math.max(16, Math.min(150, state.speed));
+
+    state.pos.addScaledVector(_fwd, state.speed * dt);
+
+    // terrain avoidance — swoop, don't crash
+    const g = groundAt(state.pos.x, state.pos.z);
+    if (state.pos.y < g + 5) {
+      state.pos.y = g + 5;
+      if (state.pitch < 0) state.pitch = 0.05;
+    }
+    if (state.pos.y > 600) { state.pos.y = 600; if (state.pitch > 0) state.pitch = -0.02; }
+
+    // the Erdtree is solid — glance off its trunk and canopy
+    {
+      const tdx = state.pos.x, tdz = state.pos.z + 1300;
+      const td = Math.hypot(tdx, tdz) || 1;
+      const rad = state.pos.y > 320 ? 270 : 80;
+      if (td < rad) {
+        state.pos.x = tdx/td * rad;
+        state.pos.z = -1300 + tdz/td * rad;
+      }
+    }
+
+    // realm edge
+    const r = Math.hypot(state.pos.x, state.pos.z);
+    if (r > 1950) {
+      const s = 1950/r;
+      state.pos.x *= s; state.pos.z *= s;
+      showMessage('THE FOG DEVOURS ALL BEYOND', 1800);
+      state.yaw += 1.5*dt;
+    }
+
+    // wing flap — powerful when boosting/climbing, glide in dives
+    const flapRate = boosting ? 9 : (state.pitch > .1 ? 7 : (state.pitch < -.2 ? 1.2 : 4.2));
+    state.flap += flapRate * dt;
+    document.getElementById('boostFx').style.opacity = boosting ? 1 : 0;
+  } else if (state.landed) {
+    const g = groundAt(state.pos.x, state.pos.z);
+    state.pos.y += (g + 2.5 - state.pos.y) * Math.min(1, 5*dt);
+    state.pitch *= (1 - 4*dt);
+    state.bank *= (1 - 4*dt);
+    state.flap += 0.8*dt;
+    document.getElementById('boostFx').style.opacity = 0;
+  }
+
+  // animate wings
+  for (const w of wings) {
+    const a = Math.sin(state.flap) * (state.landed ? 0.12 : 0.55) - 0.1;
+    w.grp.rotation.z = -w.side * a;
+  }
+  // subtle neck sway
+  neck.head.rotation.y = Math.sin(t*0.7)*0.06;
+  neck.head.rotation.x = state.pitch * 0.25;
+
+  dragon.position.copy(state.pos);
+  dragon.rotation.set(state.pitch, state.yaw, state.bank);
+
+  // camera thrill: fov kick + shake on boost
+  const boosting = state.started && !state.landed && !!(keys['ShiftLeft']||keys['ShiftRight']);
+  const targetFov = boosting ? 84 : 72;
+  camera.fov += (targetFov - camera.fov) * 5*dt;
+  camera.updateProjectionMatrix();
+  camera.position.x = (boosting ? (Math.random()-.5)*0.16 : 0);
+  camera.position.y = 4.4 + Math.sin(state.flap)*0.10 + (boosting ? (Math.random()-.5)*0.14 : 0);
+
+  // fire
+  const firing = state.started && !state.landed && !!keys['Space'];
+  updateFire(dt, firing);
+
+  // beacon flames flicker
+  for (const b of beacons) if (b.lit) {
+    const f = 1 + Math.sin(t*11 + b.pos.x)*0.18;
+    b.flame.scale.set(f, 1.25*f, f);
+    b.light.intensity = 2.4 + Math.sin(t*13 + b.pos.z)*0.7;
+  }
+
+  // embers drift
+  {
+    const a = embers.g.attributes.position.array;
+    for (let i=0;i<embers.n;i++){
+      a[i*3+1] += embers.vel[i]*dt;
+      a[i*3]   += Math.sin(t + i)*0.6*dt*10;
+      if (a[i*3+1] > 300) a[i*3+1] = 5;
+    }
+    embers.g.attributes.position.needsUpdate = true;
+  }
+
+  if (state.started) updateHUD();
+  renderer.render(scene, camera);
+}
+animate();
+
+// expose minimal state for debugging/verification
+window.GAME = {
+  get started(){ return state.started; },
+  get litCount(){ return litCount; },
+  get victory(){ return state.victory; },
+  get landed(){ return state.landed; },
+  get pos(){ return state.pos.clone(); },
+  get speed(){ return state.speed; },
+  beacons, state, keys,
+};
+</script>
+</body>
+</html>
