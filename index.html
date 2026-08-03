@@ -67,6 +67,12 @@
     font-size:20px; letter-spacing:4px; color:#ffe09a; text-shadow:0 0 16px #ff5a20,0 3px 5px #000; animation:pulse .55s infinite; }
   #targetHint { position:fixed; left:50%; bottom:112px; transform:translateX(-50%); text-align:center; font-size:14px; letter-spacing:2px; opacity:.85; line-height:1.7; }
   #targetHint.urgent { color:#ffdd8a; text-shadow:0 0 14px rgba(255,145,40,.85),0 2px 4px #000; }
+  #summonPanel { position:fixed; top:92px; left:28px; width:280px; display:none; }
+  #summonPanel .meterLabel { color:#ff9d66; text-shadow:0 0 12px rgba(255,70,20,.7); }
+  #summonFill { height:100%; width:0%; background:linear-gradient(90deg,#74180f,#ff5424,#ffe08a); box-shadow:0 0 14px rgba(255,70,25,.75); transition:width .08s linear; }
+  #hitMarker { position:fixed; left:50%; top:50%; width:34px; height:34px; transform:translate(-50%,-50%) rotate(45deg); opacity:0; transition:opacity .08s; }
+  #hitMarker:before, #hitMarker:after { content:''; position:absolute; left:15px; top:0; width:3px; height:34px; background:#fff1b0; box-shadow:0 0 9px #ff7b20; }
+  #hitMarker:after { transform:rotate(90deg); }
   #scorePanel { position:fixed; top:24px; right:30px; text-align:right; font-size:16px; letter-spacing:2px; }
   #scorePanel .combo { font-size:13px; margin-top:3px; color:#ffdd8a; text-shadow:0 0 12px rgba(255,150,40,.7); }
   #bossBar { position:fixed; top:74px; left:50%; transform:translateX(-50%); width:460px; display:none; text-align:center; }
@@ -105,6 +111,11 @@
   </div>
   <div id="lockMarker"></div>
   <div id="targetHint" class="gold"></div>
+  <div id="summonPanel" class="gold">
+    <div class="meterLabel">SCOUT CALL — BREAK ITS AIM</div>
+    <div class="meterShell"><div id="summonFill"></div></div>
+  </div>
+  <div id="hitMarker"></div>
   <div id="hint" class="gold">
     W / S — dive / climb &nbsp;·&nbsp; A / D — turn &nbsp;·&nbsp; Q — lock target<br>
     SHIFT — surge &nbsp;·&nbsp; SPACE — dragonfire &nbsp;·&nbsp; E — land / take wing<br>
@@ -127,7 +138,8 @@
   <div class="dedication gold">a tale written for Joshua</div>
   <div class="prompt gold">— PRESS ENTER TO TAKE WING —</div>
   <div class="controls gold">
-    Explore three corrupted regions and hunt their fire-breathing dragons.<br>
+    Explore three corrupted regions, each demanding a different hunting skill.<br>
+    Mission I: pursue fleeing scouts and break their reinforcement calls.<br>
     Press Q to lock a target. Hold SPACE when the reticle burns gold.<br><br>
     Enemy flame fills STAGGER. If knocked down, hold F to recover before impact.<br>
     Complete all three missions — then survive the Inferno Sovereign.
@@ -174,8 +186,7 @@ const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 6000
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = false; // no terrain/ruin receivers; avoid a wasted shadow pass
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.48;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -203,7 +214,7 @@ const erdGlow = new THREE.PointLight(0xf5c86a, 1.6, 3000, 1.2);
 erdGlow.position.set(0, 420, -1300);
 scene.add(erdGlow);
 const emberSun = new THREE.DirectionalLight(0xff8a46, 1.05);
-emberSun.position.set(650,420,300); emberSun.castShadow=true;
+emberSun.position.set(650,420,300);
 scene.add(emberSun);
 
 // ---------- Sky dome & moon disc ----------
@@ -336,8 +347,7 @@ const ruinSpots = [[380,220,9,55],[-520,-340,11,70],[720,-660,8,45],[-260,600,10
                    [-880,180,9,50],[980,420,10,66],[-620,-940,8,42],[420,880,11,58],[-1050,-520,10,72]];
 for (const [x,z,r,h] of ruinSpots) addRuin(x,z,r,h);
 
-// ---------- Beacons (the goals) ----------
-const beacons = [];
+// ---------- Decorative beacon ruins ----------
 const beaconDefs = [[260,-420],[-540,120],[640,340],[-380,-780],[880,-180]];
 for (const [x,z] of beaconDefs) {
   const top = addRuin(x, z, 13, 95);
@@ -351,13 +361,7 @@ for (const [x,z] of beaconDefs) {
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.2, 520, 8, 1, true),
     new THREE.MeshBasicMaterial({ color:0x49536f, transparent:true, opacity:.035, blending:THREE.AdditiveBlending, depthWrite:false, side:THREE.DoubleSide, fog:false }));
   beam.position.y = 262; grp.add(beam);
-  const flame = new THREE.Mesh(new THREE.SphereGeometry(5.5, 12, 10),
-    new THREE.MeshBasicMaterial({ color:0xff8f2e, transparent:true, opacity:.95, blending:THREE.AdditiveBlending, depthWrite:false }));
-  flame.position.y = 9; flame.visible = false; grp.add(flame);
-  const light = new THREE.PointLight(0xff9636, 0, 380, 1.4);
-  light.position.y = 12; grp.add(light);
   scene.add(grp);
-  beacons.push({ grp, coals, beam, flame, light, lit:false, heat:0, pos:new THREE.Vector3(x, top+8, z) });
 }
 
 // ---------- Golden rings (thread them to hasten the run) ----------
@@ -460,24 +464,48 @@ let chillUntil = -1;
 let invulnUntil = -1;
 
 // ---------- Hybrid combat campaign ----------
-const HUNT_GOAL = 6;
+const HUNT_GOAL = 8;
 const MISSION_DEFS = [
-  {name:'ASHEN RUINS', sub:'break the Ember Scouts', start:0},
-  {name:'CINDER MARSH', sub:'outfly the Flame Hunters', start:2},
-  {name:'OBSIDIAN REACH', sub:'bring down the Ironwings', start:4},
+  {name:'ASHEN RUINS', sub:'pursue the scouts · break reinforcement calls', start:0, count:4, goal:4},
+  {name:'CINDER MARSH', sub:'outfly the Flame Hunters', start:4, count:2, goal:2},
+  {name:'OBSIDIAN REACH', sub:'bring down the Ironwings', start:6, count:2, goal:2},
+];
+const SCOUT_ROUTES = [
+  [[-280,120],[-40,-220],[330,-120],[160,210]],
+  [[330,-120],[620,-300],[520,140],[160,210]],
+  [[-720,-480],[-420,-650],[-120,-430],[-360,-180]],
+  [[-80,-620],[260,-760],[540,-480],[180,-250]],
 ];
 const combat = {
-  phase:'idle', mission:1, missionKills:0, transitionAt:0,
-  score:0, kills:0, combo:1, comboUntil:0,
-  lock:null, bossHealth:720, bossMax:720, bossStage:1,
+  phase:'idle', mission:1, missionKills:0, transitionAt:0, missionStartedAt:0,
+  score:0, kills:0, combo:1, comboUntil:0, hitUntil:0,
+  lock:null, bossHealth:720, bossMax:720, bossStage:1, mission1Rank:'',
 };
 const enemies = [], pickups = [], enemyFireballs = [];
-const enemySpawn = [[-280,120],[330,-120],[-720,-480],[-430,-790],[690,510],[940,120]];
+const ENEMY_FIREBALL_CAP = 24;
+const enemyFireballCoreGeo = new THREE.SphereGeometry(1,10,8);
+const enemyFireballHaloGeo = new THREE.SphereGeometry(1,10,8);
+const enemyFireballCoreMat = new THREE.MeshBasicMaterial({color:0xfff0a0});
+for(let i=0;i<ENEMY_FIREBALL_CAP;i++){
+  const grp=new THREE.Group();
+  const core=new THREE.Mesh(enemyFireballCoreGeo,enemyFireballCoreMat);
+  const halo=new THREE.Mesh(enemyFireballHaloGeo,new THREE.MeshBasicMaterial({color:0xff8a20,transparent:true,opacity:.28,blending:THREE.AdditiveBlending,depthWrite:false}));
+  const light=new THREE.PointLight(0xff5a18,0,90,2);
+  grp.add(core,halo,light);grp.visible=false;scene.add(grp);
+  enemyFireballs.push({grp,core,halo,light,vel:new THREE.Vector3(),life:0,type:'SCOUT',r:0,active:false});
+}
+let enemyFireballCursor=0;
+function clearEnemyFireballs(){
+  for(const f of enemyFireballs){f.active=false;f.life=0;f.grp.visible=false;}
+  enemyFireballCursor=0;
+}
+const enemySpawn = [[-280,120],[330,-120],[-720,-480],[-80,-620],[-430,-790],[690,510],[940,120],[-880,180]];
 
 function enemyModel(type) {
   const g = new THREE.Group();
   const palette = type==='SCOUT' ? [0x5a1d12,0xa63718,0xffb13b] :
-    (type==='HUNTER' ? [0x35213f,0x7b2946,0xff5b28] : [0x241d1b,0x5c3327,0xffd05b]);
+    (type==='ALPHA' ? [0x43100d,0xd64a16,0xffe07a] :
+    (type==='HUNTER' ? [0x35213f,0x7b2946,0xff5b28] : [0x241d1b,0x5c3327,0xffd05b]));
   const scaleMat = new THREE.MeshStandardMaterial({color:palette[0],emissive:palette[1],emissiveIntensity:.42,roughness:.68,metalness:type==='BRUTE'?.45:.16});
   const membrane = new THREE.MeshStandardMaterial({color:palette[1],emissive:palette[0],emissiveIntensity:.35,roughness:.82,side:THREE.DoubleSide,transparent:true,opacity:.92});
   const body=new THREE.Mesh(new THREE.CapsuleGeometry(type==='BRUTE'?2.8:2.1,type==='BRUTE'?9:7,5,9),scaleMat);body.rotation.x=Math.PI/2;g.add(body);
@@ -495,30 +523,50 @@ function enemyModel(type) {
   scene.add(g); return g;
 }
 
-const enemyTypes=['SCOUT','SCOUT','HUNTER','HUNTER','BRUTE','BRUTE'];
+const enemyTypes=['SCOUT','SCOUT','SCOUT','ALPHA','HUNTER','HUNTER','BRUTE','BRUTE'];
 for (let i=0;i<HUNT_GOAL;i++) {
   const type=enemyTypes[i], grp=enemyModel(type);
-  const maxHealth=type==='SCOUT'?55:(type==='HUNTER'?80:125);
-  enemies.push({grp,type,name:type==='SCOUT'?'EMBER SCOUT':(type==='HUNTER'?'FLAME HUNTER':'IRONWING BRUTE'),
-    health:maxHealth,maxHealth,alive:false,speed:type==='SCOUT'?48:(type==='HUNTER'?40:31),
-    attackAt:0,fireAt:-1,chargeAt:0,phase:i*1.7,hitUntil:0});
+  const maxHealth=type==='SCOUT'?55:(type==='ALPHA'?110:(type==='HUNTER'?80:125));
+  enemies.push({grp,type,name:type==='SCOUT'?'EMBER SCOUT':(type==='ALPHA'?'ALPHA SCOUT':(type==='HUNTER'?'FLAME HUNTER':'IRONWING BRUTE')),
+    health:maxHealth,maxHealth,alive:false,speed:type==='SCOUT'?54:(type==='ALPHA'?67:(type==='HUNTER'?40:31)),
+    attackAt:0,fireAt:-1,chargeAt:0,phase:i*1.7,hitUntil:0,summon:0,routeIndex:0,wasInRange:false});
 }
 
+function resetEnemy(e,i,active){
+  const [x,z]=enemySpawn[i];
+  e.health=e.maxHealth;e.alive=active;e.attackAt=gameTime+2.4+(i%2)*.7;e.fireAt=-1;e.chargeAt=0;e.hitUntil=0;e.phase=i*1.7;
+  e.summon=0;e.routeIndex=0;e.wasInRange=false;
+  e.grp.visible=active;e.grp.scale.setScalar(1);e.grp.rotation.set(0,0,0);e.grp.position.set(x,terrainH(x,z)+95+(i%2)*35,z);
+  const throat=e.grp.userData.throat;throat.material.opacity=.08;throat.scale.setScalar(1);
+}
+function activateEnemyAt(i, message){
+  const e=enemies[i];
+  if(!e||e.alive)return false;
+  resetEnemy(e,i,true);e.attackAt=gameTime+3;
+  if(message){roar();showMessage(message,1900);}
+  return true;
+}
+function ensureMission1Progress(){
+  if(combat.mission!==1||combat.phase!=='mission')return;
+  const liveScouts=enemies.slice(0,3).some(e=>e.alive);
+  if(combat.missionKills<3&&!liveScouts)activateEnemyAt(2,'A REINFORCEMENT SCOUT BREAKS FROM THE CLOUDS');
+  if(combat.missionKills>=3&&!enemies[3].alive)activateEnemyAt(3,'ALPHA SCOUT — THE ASHEN ACE DESCENDS');
+}
 function beginMission(n, announceIt=true){
-  combat.phase='mission';combat.mission=n;combat.missionKills=0;combat.lock=null;
-  for(let i=enemyFireballs.length-1;i>=0;i--){scene.remove(enemyFireballs[i].grp);enemyFireballs.splice(i,1);}
+  combat.phase='mission';combat.mission=n;combat.missionKills=0;combat.lock=null;combat.missionStartedAt=gameTime;
+  clearEnemyFireballs();
   enemies.forEach((e,i)=>{
-    const active=i>=MISSION_DEFS[n-1].start&&i<MISSION_DEFS[n-1].start+2;
-    const [x,z]=enemySpawn[i];e.health=e.maxHealth;e.alive=active;e.attackAt=clock.elapsedTime+2.4+(i%2)*.7;e.fireAt=-1;
-    e.grp.visible=active;e.grp.scale.setScalar(1);e.grp.position.set(x,terrainH(x,z)+95+(i%2)*35,z);
+    const def=MISSION_DEFS[n-1];
+    const active=n===1 ? i<2 : (i>=def.start&&i<def.start+def.count);
+    resetEnemy(e,i,active);
   });
   if(announceIt){roar();showMessage('MISSION '+n+' — '+MISSION_DEFS[n-1].name,2600);}
 }
 function resetCombat() {
-  combat.score=0;combat.kills=0;combat.combo=1;combat.comboUntil=0;combat.bossHealth=combat.bossMax;combat.bossStage=1;
-  for(let i=enemyFireballs.length-1;i>=0;i--){scene.remove(enemyFireballs[i].grp);enemyFireballs.splice(i,1);}
+  combat.score=0;combat.kills=0;combat.combo=1;combat.comboUntil=0;combat.hitUntil=0;combat.mission1Rank='';combat.bossHealth=combat.bossMax;combat.bossStage=1;
+  clearEnemyFireballs();
   for(const p of pickups){p.active=false;p.grp.visible=false;}
-  shadow.grp.visible=false;shadow.heat=0;shadow.fireHold=0;beginMission(1,false);
+  resetBoss();beginMission(1,false);
   document.getElementById('bossBar').style.display='none';document.getElementById('lockMarker').style.display='none';
 }
 
@@ -543,50 +591,64 @@ function dropEssence(pos) {
 }
 function defeatEnemy(e){
   if(!e.alive)return; e.alive=false;e.grp.visible=false;dropEssence(e.grp.position);
-  combat.kills++;combat.missionKills++;combat.combo=Math.min(5,combat.combo+1);combat.comboUntil=clock.elapsedTime+7;
-  combat.score+=Math.round((e.type==='SCOUT'?180:(e.type==='HUNTER'?280:420))*combat.combo);
+  combat.kills++;combat.missionKills++;combat.combo=Math.min(5,combat.combo+1);combat.comboUntil=gameTime+7;
+  combat.score+=Math.round((e.type==='SCOUT'?180:(e.type==='ALPHA'?650:(e.type==='HUNTER'?280:420)))*combat.combo);
   chime([440,659.25,880],.55,.16);showMessage(e.name+' BROKEN — COMBO x'+combat.combo,1300);
   if(combat.lock===e)combat.lock=nearestTarget();
-  if(combat.missionKills>=2){
-    if(combat.mission<3){combat.phase='transition';combat.transitionAt=clock.elapsedTime+2.5;combat.lock=null;showMessage('REGION LIBERATED — SEEK THE NEXT FLAME',2300);}
-    else activateBoss();
+  const goal=MISSION_DEFS[combat.mission-1].goal;
+  if(combat.mission===1&&combat.missionKills<goal){ensureMission1Progress();return;}
+  if(combat.missionKills>=goal){
+    if(combat.mission<3){
+      if(combat.mission===1){
+        const duration=gameTime-combat.missionStartedAt;
+        combat.mission1Rank=duration<45&&state.wounds===0?'S':(duration<70?'A':(duration<105?'B':'C'));
+        combat.score+=combat.mission1Rank==='S'?1200:(combat.mission1Rank==='A'?800:(combat.mission1Rank==='B'?450:200));
+      }
+      combat.phase='transition';combat.transitionAt=gameTime+3.2;combat.lock=null;clearEnemyFireballs();
+      showMessage('REGION LIBERATED — RANK '+(combat.mission===1?combat.mission1Rank:'◆'),2800);
+    } else activateBoss();
   }
 }
+const _enemyFireOrigin=new THREE.Vector3(),_enemyFireAim=new THREE.Vector3(),_enemyFireLead=new THREE.Vector3();
 function spawnEnemyFire(e){
-  const origin=new THREE.Vector3();e.grp.userData.throat.getWorldPosition(origin);
-  const predicted=state.pos.clone();
-  if(e.type==='HUNTER')predicted.add(forwardVec(new THREE.Vector3()).multiplyScalar(state.speed*.42));
-  const dir=predicted.sub(origin).normalize(),size=e.type==='BRUTE'?3.1:(e.type==='HUNTER'?2.4:1.9);
-  const grp=new THREE.Group();
-  const core=new THREE.Mesh(new THREE.SphereGeometry(size,10,8),new THREE.MeshBasicMaterial({color:0xfff0a0}));
-  const halo=new THREE.Mesh(new THREE.SphereGeometry(size*2.3,10,8),new THREE.MeshBasicMaterial({color:e.type==='HUNTER'?0xff3b16:0xff8a20,transparent:true,opacity:.28,blending:THREE.AdditiveBlending,depthWrite:false}));
-  const light=new THREE.PointLight(0xff5a18,e.type==='BRUTE'?5:3.3,90,2);grp.add(core,halo,light);grp.position.copy(origin);scene.add(grp);
-  enemyFireballs.push({grp,vel:dir.multiplyScalar(e.type==='SCOUT'?92:(e.type==='HUNTER'?112:74)),life:5,type:e.type,r:size*1.8});
+  const f=enemyFireballs[enemyFireballCursor];
+  enemyFireballCursor=(enemyFireballCursor+1)%ENEMY_FIREBALL_CAP;
+  e.grp.userData.throat.getWorldPosition(_enemyFireOrigin);
+  _enemyFireAim.copy(state.pos);
+  if(e.type==='HUNTER')_enemyFireAim.add(forwardVec(_enemyFireLead).multiplyScalar(state.speed*.42));
+  const size=e.type==='BRUTE'?3.1:(e.type==='HUNTER'?2.4:1.9);
+  f.active=true;f.life=5;f.type=e.type;f.r=size*1.8;
+  f.grp.visible=true;f.grp.position.copy(_enemyFireOrigin);f.grp.rotation.set(0,0,0);
+  f.core.scale.setScalar(size);f.halo.scale.setScalar(size*2.3);
+  f.halo.material.color.set(e.type==='HUNTER'?0xff3b16:0xff8a20);
+  f.light.intensity=e.type==='BRUTE'?5:3.3;
+  f.vel.copy(_enemyFireAim).sub(_enemyFireOrigin).normalize().multiplyScalar(e.type==='SCOUT'?92:(e.type==='HUNTER'?112:74));
   if(e.type==='BRUTE')roar();
 }
 function updateEnemyFire(dt){
-  for(let i=enemyFireballs.length-1;i>=0;i--){
-    const f=enemyFireballs[i];f.grp.position.addScaledVector(f.vel,dt);f.life-=dt;f.grp.rotation.y+=dt*8;
-    const halo=f.grp.children[1];halo.scale.setScalar(1+Math.sin(clock.elapsedTime*18+i)*.18);
+  for(let i=0;i<enemyFireballs.length;i++){
+    const f=enemyFireballs[i];if(!f.active)continue;
+    f.grp.position.addScaledVector(f.vel,dt);f.life-=dt;f.grp.rotation.y+=dt*8;
+    f.halo.scale.setScalar(f.r/1.8*2.3*(1+Math.sin(gameTime*18+i)*.18));
     const ground=terrainH(f.grp.position.x,f.grp.position.z);
     if(!state.landed&&!state.fallen&&f.grp.position.distanceTo(state.pos)<9+f.r){
       const power=f.type==='SCOUT'?32:(f.type==='HUNTER'?44:62);woundPlayer(f.type==='BRUTE'?'IRON FIRE HURLS THEE ASIDE':'HOSTILE FLAME STRIKES THY WINGS',power,false);f.life=0;
     }
     if(f.grp.position.y<ground+2)f.life=0;
-    if(f.life<=0){const p=f.grp.position;addScorch(p.x,Math.max(p.y,ground+1),p.z);scene.remove(f.grp);enemyFireballs.splice(i,1);}
+    if(f.life<=0){const p=f.grp.position;addScorch(p.x,Math.max(p.y,ground+1),p.z);f.active=false;f.grp.visible=false;}
   }
 }
 function activateBoss(){
-  for(let i=enemyFireballs.length-1;i>=0;i--){scene.remove(enemyFireballs[i].grp);enemyFireballs.splice(i,1);}
+  clearEnemyFireballs();resetBoss();
   combat.phase='boss';combat.lock=shadow;combat.bossHealth=combat.bossMax;combat.bossStage=1;
   shadow.name='INFERNO SOVEREIGN';shadow.grp.visible=true;shadow.grp.position.set(state.pos.x+180,state.pos.y+55,state.pos.z-240);
   shadow.routedUntil=-1;shadow.mode='hunt';document.getElementById('bossBar').style.display='block';
   roar();showMessage('THE INFERNO SOVEREIGN DESCENDS',3000);
 }
 function winCombat(){
-  combat.phase='victory';state.victory=true;combat.lock=null;shadow.grp.visible=false;
-  combat.score+=Math.max(1000,5000-Math.floor((performance.now()-state.startTime)/100));
-  const secs=(performance.now()-state.startTime)/1000;
+  combat.phase='victory';state.victory=true;combat.lock=null;shadow.grp.visible=false;clearSovereignFire();
+  const secs=runElapsed();
+  combat.score+=Math.min(5000,Math.max(1000,5000-Math.floor(secs*10)));
   let bestScore=0,bestTime=Infinity;
   try{bestScore=+(localStorage.getItem('dragonCombatBestScore')||0);bestTime=+(localStorage.getItem('dragonCombatBestTime')||Infinity);
     if(combat.score>bestScore)localStorage.setItem('dragonCombatBestScore',combat.score);
@@ -594,24 +656,44 @@ function winCombat(){
   const finalScore=Math.floor(combat.score);
   document.getElementById('victoryStats').textContent='SCORE '+finalScore+' · '+fmtTime(secs)+(finalScore>bestScore?' · NEW HIGH SCORE':'');
   document.getElementById('bossBar').style.display='none';document.getElementById('lockMarker').style.display='none';
-  document.getElementById('victory').style.display='flex';setTimeout(()=>document.getElementById('victory').style.opacity=1,30);
+  document.getElementById('victory').style.display='flex';scheduleUI(()=>document.getElementById('victory').style.opacity=1,30);
   chime([392,523.25,659.25,783.99,1046.5],1.6,.22);
 }
 
-const _combatV=new THREE.Vector3();
+const _combatV=new THREE.Vector3(),_unitScale=new THREE.Vector3(1,1,1),_enemyRoute=new THREE.Vector3(),_enemyAway=new THREE.Vector3();
 function updateCombat(dt,t){
   if(combat.combo>1 && t>combat.comboUntil)combat.combo=1;
   if(combat.phase==='transition'&&t>=combat.transitionAt)beginMission(combat.mission+1);
-  if(combat.phase==='mission') for(const e of enemies) if(e.alive){
-    e.phase+=dt*(e.type==='SCOUT'?2.3:1.35);const to=_combatV.copy(state.pos).sub(e.grp.position);const d=to.length();
-    const desired=e.type==='BRUTE'?70:105;
-    if(d>desired)e.grp.position.addScaledVector(to.normalize(),e.speed*dt);else if(d<desired*.62)e.grp.position.addScaledVector(to.normalize(),-e.speed*.45*dt);
+  if(combat.phase==='mission') for(let enemyIndex=0;enemyIndex<enemies.length;enemyIndex++){
+    const e=enemies[enemyIndex];if(!e.alive)continue;
+    const scoutRun=combat.mission===1&&(e.type==='SCOUT'||e.type==='ALPHA');
+    e.phase+=dt*(scoutRun?2.6:1.35);const to=_combatV.copy(state.pos).sub(e.grp.position);const d=to.length();
+    if(scoutRun){
+      const route=SCOUT_ROUTES[Math.min(3,enemyIndex)];const point=route[e.routeIndex%route.length];
+      _enemyRoute.set(point[0],terrainH(point[0],point[1])+100+(enemyIndex%2)*30,point[1]).sub(e.grp.position);
+      if(_enemyRoute.length()<35)e.routeIndex=(e.routeIndex+1)%route.length;
+      if(d<95)_enemyRoute.add(_enemyAway.copy(e.grp.position).sub(state.pos).multiplyScalar(1.6));
+      if(_enemyRoute.lengthSq()>1)e.grp.position.addScaledVector(_enemyRoute.normalize(),e.speed*dt);
+    }else{
+      const desired=e.type==='BRUTE'?70:105;
+      if(d>desired)e.grp.position.addScaledVector(to.normalize(),e.speed*dt);else if(d<desired*.62)e.grp.position.addScaledVector(to.normalize(),-e.speed*.45*dt);
+    }
     e.grp.position.y+=Math.sin(e.phase)*dt*5;e.grp.lookAt(state.pos);e.grp.rotateY(Math.PI);e.grp.rotation.z=Math.sin(e.phase)*.2;
-    if(t>e.attackAt&&d<260){e.fireAt=t+(e.type==='SCOUT'?.62:.9);e.attackAt=t+(e.type==='SCOUT'?3.5:(e.type==='HUNTER'?3.0:4.2));}
-    const throat=e.grp.userData.throat;if(e.fireAt>t){const glow=1-Math.max(0,(e.fireAt-t)/(e.type==='SCOUT'?.62:.9));throat.material.opacity=.15+glow*.85;throat.scale.setScalar(1+glow*1.6);}
+    const inAttackRange=d<260;
+    if(inAttackRange&&!e.wasInRange)e.attackAt=Math.max(e.attackAt,t+.75);
+    e.wasInRange=inAttackRange;
+    const scoutTelegraph=e.type==='SCOUT'||e.type==='ALPHA';
+    if(t>e.attackAt&&inAttackRange){e.fireAt=t+(scoutTelegraph?.62:.9);e.attackAt=t+(e.type==='ALPHA'?2.45:(e.type==='SCOUT'?3.5:(e.type==='HUNTER'?3.0:4.2)));}
+    const throat=e.grp.userData.throat;if(e.fireAt>t){const glow=1-Math.max(0,(e.fireAt-t)/(scoutTelegraph?.62:.9));throat.material.opacity=.15+glow*.85;throat.scale.setScalar(1+glow*1.6);}
     else if(e.fireAt>0){spawnEnemyFire(e);e.fireAt=-1;throat.material.opacity=.08;throat.scale.setScalar(1);}
+    if(e.type==='ALPHA'&&d<24&&t>e.chargeAt){e.chargeAt=t+4.5;state.pos.addScaledVector(to.normalize(),26);woundPlayer('THE ALPHA SCOUT RAKES ACROSS THY WINGS',58,true);}
     if(e.type==='BRUTE'&&d<18&&t>e.chargeAt){e.chargeAt=t+5;state.pos.addScaledVector(to.normalize(),22);woundPlayer('THE IRONWING SMASHES THEE FROM THE SKY',85,true);}
-    if(t<e.hitUntil)e.grp.scale.setScalar(1.22);else e.grp.scale.lerp(new THREE.Vector3(1,1,1),Math.min(1,dt*10));
+    if(combat.mission===1&&e.type==='SCOUT'&&!enemies[2].alive&&combat.missionKills<2){
+      const canCall=d<300&&e.fireAt<0;
+      e.summon=Math.max(0,Math.min(100,e.summon+(canCall?20:-34)*dt));
+      if(e.summon>=100){e.summon=0;activateEnemyAt(2,'THE SCOUT CALLS REINFORCEMENTS');combat.score=Math.max(0,combat.score-150);}
+    }else e.summon=Math.max(0,e.summon-45*dt);
+    if(t<e.hitUntil)e.grp.scale.setScalar(1.22);else e.grp.scale.lerp(_unitScale,Math.min(1,dt*10));
   }
   updateEnemyFire(dt);
   for(const p of pickups)if(p.active){p.grp.rotation.y+=dt*3;p.grp.position.y+=Math.sin(t*4+p.grp.position.x)*dt*1.2;
@@ -624,10 +706,10 @@ const shadow = {
   grp: new THREE.Group(), head: null, wings: [],
   yaw: 0, pitch: 0, speed: 40, mode: 'patrol',
   ph: Math.random()*Math.PI*2, flap: 0,
-  heat: 0, fireHold: 0, routedUntil: -1, lastRoar: -99,
+  fireHold: 0, routedUntil: -1, lastRoar: -99,
 };
 const SFIRE_N = 200;
-const sfire = { pts:null, pos:new Float32Array(SFIRE_N*3), vel:[], life:new Float32Array(SFIRE_N), next:0 };
+const sfire = { pts:null, pos:new Float32Array(SFIRE_N*3), vel:[], life:new Float32Array(SFIRE_N), next:0, emitCarry:0 };
 {
   const g = shadow.grp;
   g.rotation.order = 'YXZ';
@@ -682,7 +764,31 @@ const sfire = { pts:null, pos:new Float32Array(SFIRE_N*3), vel:[], life:new Floa
   scene.add(sfire.pts);
 }
 const _sv1 = new THREE.Vector3(), _sv2 = new THREE.Vector3(), _se = new THREE.Euler(0,0,0,'YXZ');
+function clearSovereignFire(){
+  sfire.life.fill(0);sfire.emitCarry=0;sfire.next=0;
+  for(let i=0;i<SFIRE_N;i++)sfire.pos[i*3+1]=-9999;
+  sfire.pts.geometry.attributes.position.needsUpdate=true;
+}
+function resetBoss(){
+  shadow.yaw=0;shadow.pitch=0;shadow.speed=40;shadow.mode='patrol';shadow.ph=0;shadow.flap=0;
+  shadow.fireHold=0;shadow.routedUntil=-1;shadow.lastRoar=-99;
+  shadow.grp.position.set(900,260,-900);shadow.grp.rotation.set(0,0,0);shadow.grp.scale.setScalar(1);shadow.grp.visible=false;
+  for(const wing of shadow.wings)wing.grp.rotation.set(0,0,0);
+  clearSovereignFire();
+}
+function updateSovereignFire(dt){
+  for(let i=0;i<SFIRE_N;i++){
+    if(sfire.life[i]<=0)continue;
+    sfire.life[i]-=dt;
+    if(sfire.life[i]<=0){sfire.pos[i*3+1]=-9999;continue;}
+    sfire.pos[i*3]+=sfire.vel[i].x*dt;
+    sfire.pos[i*3+1]+=sfire.vel[i].y*dt;
+    sfire.pos[i*3+2]+=sfire.vel[i].z*dt;
+  }
+  sfire.pts.geometry.attributes.position.needsUpdate=true;
+}
 function updateShadow(dt, t) {
+  updateSovereignFire(dt);
   const g = shadow.grp;
   if (combat.phase !== 'boss' || combat.bossHealth <= 0) { g.visible=false; return; }
   const bossFrac=combat.bossHealth/combat.bossMax;
@@ -731,7 +837,10 @@ function updateShadow(dt, t) {
     const facing = dist > 1 ? fwd.dot(toP.multiplyScalar(1/dist)) : 1;
     if (shadow.mode === 'hunt' && dist < 140 && facing > 0.86) {
       shadow.head.getWorldPosition(_sv1);
-      for (let s=0; s<3; s++) {
+      sfire.emitCarry+=180*dt;
+      const emitCount=Math.min(12,Math.floor(sfire.emitCarry+1e-9));
+      sfire.emitCarry=Math.max(0,sfire.emitCarry-emitCount);
+      for (let s=0; s<emitCount; s++) {
         const i = sfire.next; sfire.next = (sfire.next+1)%SFIRE_N;
         sfire.pos[i*3]=_sv1.x; sfire.pos[i*3+1]=_sv1.y; sfire.pos[i*3+2]=_sv1.z;
         sfire.vel[i].copy(fwd).multiplyScalar(85);
@@ -749,25 +858,6 @@ function updateShadow(dt, t) {
       shadow.fireHold = Math.max(0, shadow.fireHold - dt*2);
     }
   }
-  for (let i=0;i<SFIRE_N;i++){
-    if (sfire.life[i] <= 0) continue;
-    sfire.life[i] -= dt;
-    if (sfire.life[i] <= 0) { sfire.pos[i*3+1] = -9999; continue; }
-    sfire.pos[i*3]   += sfire.vel[i].x*dt;
-    sfire.pos[i*3+1] += sfire.vel[i].y*dt;
-    sfire.pos[i*3+2] += sfire.vel[i].z*dt;
-  }
-  sfire.pts.geometry.attributes.position.needsUpdate = true;
-}
-function routShadow() {
-  shadow.heat = 0;
-  shadow.fireHold = 0;
-  shadow.mode = 'patrol';
-  shadow.routedUntil = clock.elapsedTime + 50;
-  const a = Math.random()*Math.PI*2;
-  shadow.grp.position.set(Math.cos(a)*1800, 300, Math.sin(a)*1800);
-  showMessage('THE INFERNO SOVEREIGN IS DRIVEN OFF', 2400);
-  chime([392, 523.25, 783.99], 1.0, .2);
 }
 
 // ---------- The Dragon ----------
@@ -860,13 +950,12 @@ const wings = [];
 // Camera rides on the dragon's back, just behind the rider
 dragon.add(camera);
 camera.position.set(0, 4.4, 4.6);
-camera.lookAt(new THREE.Vector3(0, 2.2, -30).add(dragon.position));
 camera.lookAt(dragon.localToWorld(new THREE.Vector3(0, 2.0, -40)));
 
 // ---------- Dragonfire particles ----------
 const FIRE_N = 420;
 let fireTex = null;
-const fire = { pts:null, pos:new Float32Array(FIRE_N*3), vel:[], life:new Float32Array(FIRE_N), next:0 };
+const fire = { pts:null, pos:new Float32Array(FIRE_N*3), vel:[], life:new Float32Array(FIRE_N), next:0, emitCarry:0 };
 {
   for (let i=0;i<FIRE_N;i++){ fire.vel.push(new THREE.Vector3()); fire.pos[i*3+1] = -9999; }
   const g = new THREE.BufferGeometry();
@@ -905,6 +994,15 @@ function addScorch(x, y, z) {
   const i = scorch.next; scorch.next = (scorch.next+1)%SCORCH_N;
   scorch.pos[i*3]=x; scorch.pos[i*3+1]=y; scorch.pos[i*3+2]=z;
   scorch.life[i] = 3.5 + Math.random()*1.5;
+}
+function clearPlayerParticles(){
+  fire.life.fill(0);fire.emitCarry=0;fire.next=0;
+  scorch.life.fill(0);scorch.next=0;
+  for(let i=0;i<FIRE_N;i++)fire.pos[i*3+1]=-9999;
+  for(let i=0;i<SCORCH_N;i++)scorch.pos[i*3+1]=-9999;
+  fire.pts.geometry.attributes.position.needsUpdate=true;
+  scorch.pts.geometry.attributes.position.needsUpdate=true;
+  fireLight.intensity=0;
 }
 
 // ---------- Sound (Web Audio, synthesized — no asset files) ----------
@@ -985,66 +1083,74 @@ function roar() {
 // ---------- Game state ----------
 const state = {
   started:false, landed:false, victory:false,
-  yaw:0, pitch:0, bank:0, speed:45, flap:0, startTime:0,
-  fire:100, stamina:100, targetHint:'',
+  yaw:0, pitch:0, bank:0, speed:45, flap:0, startTime:0, timeCredit:0,
+  fire:100, stamina:100,
   wounds:0, stagger:0, recovery:0, fallen:false, restUntil:-1,
   pos:new THREE.Vector3(0, terrainH(0,900)+90, 900),
 };
 dragon.position.copy(state.pos);
-state.yaw = Math.PI; // face the Erdtree... actually beacons; face -z? start facing world center
 state.yaw = 0;
 
 const keys = {};
+const uiTimers = new Set();
+let msgTimer = null;
+function scheduleUI(fn,ms){
+  const id=setTimeout(()=>{uiTimers.delete(id);fn();},ms);uiTimers.add(id);return id;
+}
+function clearUITimers(){for(const id of uiTimers)clearTimeout(id);uiTimers.clear();msgTimer=null;}
+function clearKeys(){for(const code in keys)keys[code]=false;}
+addEventListener('blur',clearKeys);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearKeys();});
 addEventListener('keydown', e => {
   keys[e.code] = true;
-  if (e.code === 'Enter' && !state.started) startGame();
+  if (e.code === 'Enter' && !state.started && !e.repeat) startGame();
   if (e.code === 'KeyQ' && state.started && !e.repeat) toggleLock();
-  if (e.code === 'KeyE') toggleLand();
-  if (e.code === 'KeyR') resetGame();
+  if (e.code === 'KeyE' && !e.repeat) toggleLand();
+  if (e.code === 'KeyR' && !e.repeat) resetGame();
   if (['Space','ArrowUp','ArrowDown'].includes(e.code)) e.preventDefault();
 });
 addEventListener('keyup', e => keys[e.code] = false);
 
 function startGame() {
   state.started = true;
-  state.startTime = performance.now();
+  state.startTime = gameTime;
+  state.timeCredit = 0;
   resetCombat();
   initAudio();
   const s = document.getElementById('startScreen');
   s.style.opacity = 0;
-  setTimeout(() => s.style.display = 'none', 1300);
+  scheduleUI(() => s.style.display = 'none', 1300);
   showMessage('MISSION 1 — HUNT THE EMBER SCOUTS');
 }
 
+function resetUI(){
+  clearUITimers();
+  for(const id of ['boostFx','chillFx','hurtFx','knockFx'])document.getElementById(id).style.opacity=0;
+  document.getElementById('message').style.opacity=0;
+  document.getElementById('recoveryPrompt').style.display='none';
+  document.getElementById('bossBar').style.display='none';
+  document.getElementById('summonPanel').style.display='none';
+  document.getElementById('hitMarker').style.opacity=0;
+  const marker=document.getElementById('lockMarker');marker.style.display='none';marker.className='';
+  const v=document.getElementById('victory');v.style.opacity=0;v.style.display='none';
+  const s=document.getElementById('startScreen');s.style.opacity=0;s.style.display='none';
+  document.getElementById('compass').style.display='';
+}
 function resetGame() {
   if (!state.started) return;
-  for (const b of beacons) {
-    b.lit = false; b.heat = 0;
-    b.flame.visible = false;
-    b.light.intensity = 0;
-    b.beam.material.color.set(0xf3cd6e);
-    b.beam.material.opacity = .035;
-    b.beam.scale.set(1, 1, 1);
-    b.coals.material.emissive.set(0x000000);
-  }
   for (const rg of rings) {
     rg.passed = false;
     rg.mesh.material.opacity = .75;
   }
   state.wounds=0;state.stagger=0;state.recovery=0;state.fallen=false;state.restUntil=-1;
   invulnUntil = -1; chillUntil = -1;
-  shadow.heat = 0; shadow.fireHold = 0; shadow.routedUntil = -1; shadow.mode = 'patrol';
-  shadow.grp.position.set(900, 260, -900);
   state.victory = false;
-  const v = document.getElementById('victory');
-  v.style.opacity = 0;
-  v.style.display = 'none';
-  document.getElementById('compass').style.display = '';
   state.pos.set(0, terrainH(0,900)+90, 900);
-  state.yaw = 0; state.pitch = 0; state.bank = 0;
+  state.yaw = 0; state.pitch = 0; state.bank = 0; state.flap=0;
   state.speed = 45; state.landed = false;
-  state.fire=100;state.stamina=100;state.targetHint='';document.getElementById('recoveryPrompt').style.display='none';
-  state.startTime = performance.now();
+  state.fire=100;state.stamina=100;
+  state.startTime = gameTime; state.timeCredit = 0;
+  clearKeys();clearPlayerParticles();resetUI();
   resetCombat();
   showMessage('THE TALE BEGINS ANEW', 2200);
 }
@@ -1054,14 +1160,17 @@ function fmtTime(s) {
   const m = Math.floor(s/60), ss = Math.floor(s%60);
   return m + ':' + String(ss).padStart(2, '0');
 }
+function runElapsed() {
+  return Math.max(0, gameTime - state.startTime - state.timeCredit);
+}
 
 function woundPlayer(msg, staggerPower=30, forceKnock=false) {
-  const t = clock.elapsedTime;
+  const t = gameTime;
   if (t < invulnUntil || !state.started || state.landed || state.fallen || state.victory) return;
   invulnUntil=t+1.45;state.wounds=Math.min(3,state.wounds+1);state.stagger=Math.min(100,state.stagger+staggerPower);
   const fx = document.getElementById('hurtFx');
   fx.style.opacity = 1;
-  setTimeout(() => fx.style.opacity = 0, 550);
+  scheduleUI(() => fx.style.opacity = 0, 550);
   thud();
   if(forceKnock||state.stagger>=100||state.wounds>=3){
     state.fallen=true;state.recovery=0;state.bank+=(Math.random()<.5?-1:1)*1.4;
@@ -1073,17 +1182,16 @@ function woundPlayer(msg, staggerPower=30, forceKnock=false) {
 }
 function recoverFlight(){
   if(!state.fallen)return;state.fallen=false;state.recovery=0;state.stagger=35;state.speed=Math.max(38,state.speed);state.pitch=.08;state.bank*=.25;
-  invulnUntil=clock.elapsedTime+3;document.getElementById('knockFx').style.opacity=0;document.getElementById('recoveryPrompt').style.display='none';
+  invulnUntil=gameTime+3;document.getElementById('knockFx').style.opacity=0;document.getElementById('recoveryPrompt').style.display='none';
   showMessage('WINGS CAUGHT THE WIND — RECOVERY!',1800);chime([392,523.25,783.99],.7,.16);
 }
 
-let msgTimer = null;
 function showMessage(txt, ms=3200) {
   const box = document.getElementById('message');
   document.getElementById('messageText').textContent = txt;
   box.style.opacity = 1;
-  clearTimeout(msgTimer);
-  msgTimer = setTimeout(() => box.style.opacity = 0, ms);
+  if(msgTimer){clearTimeout(msgTimer);uiTimers.delete(msgTimer);}
+  msgTimer = scheduleUI(() => {box.style.opacity = 0;msgTimer=null;}, ms);
 }
 
 function groundAt(x, z) { return terrainH(x, z); }
@@ -1091,7 +1199,7 @@ function groundAt(x, z) { return terrainH(x, z); }
 function toggleLand() {
   if (!state.started || state.fallen) return;
   if (state.landed) {
-    if (clock.elapsedTime < state.restUntil) {
+    if (gameTime < state.restUntil) {
       showMessage('THE DRAKE YET RESTS', 1400);
       return;
     }
@@ -1112,9 +1220,9 @@ function toggleLand() {
 }
 
 // ---------- Fire breathing ----------
-const _fwd = new THREE.Vector3(), _headW = new THREE.Vector3(), _toB = new THREE.Vector3();
+const _fwd = new THREE.Vector3(), _headW = new THREE.Vector3(), _toB = new THREE.Vector3(), _flightEuler=new THREE.Euler(0,0,0,'YXZ');
 function forwardVec(out) {
-  out.set(0,0,-1).applyEuler(new THREE.Euler(state.pitch, state.yaw, 0, 'YXZ'));
+  out.set(0,0,-1).applyEuler(_flightEuler.set(state.pitch,state.yaw,0));
   return out;
 }
 function updateFire(dt, firing) {
@@ -1123,7 +1231,10 @@ function updateFire(dt, firing) {
     state.fire = Math.max(0, state.fire - 34*dt);
     neck.head.getWorldPosition(_headW);
     forwardVec(_fwd);
-    for (let s=0; s<4; s++) {
+    fire.emitCarry+=240*dt;
+    const emitCount=Math.min(16,Math.floor(fire.emitCarry+1e-9));
+    fire.emitCarry=Math.max(0,fire.emitCarry-emitCount);
+    for (let s=0; s<emitCount; s++) {
       const i = fire.next; fire.next = (fire.next+1)%FIRE_N;
       fire.pos[i*3]  =_headW.x+_fwd.x*7;
       fire.pos[i*3+1]=_headW.y+_fwd.y*7;
@@ -1141,7 +1252,7 @@ function updateFire(dt, firing) {
       _toB.copy(e.grp.position).sub(_headW);
       const d=_toB.length();
       if(d<110 && _toB.normalize().dot(_fwd)>.68){
-        e.health-=52*dt; e.hitUntil=clock.elapsedTime+.12; combat.score+=8*dt;
+        e.health-=52*dt; e.hitUntil=gameTime+.12; e.summon=Math.max(0,e.summon-95*dt); combat.hitUntil=gameTime+.09; combat.score+=8*dt;
         if(e.health<=0)defeatEnemy(e);
       }
     }
@@ -1151,13 +1262,12 @@ function updateFire(dt, firing) {
       const d=_toB.length();
       if(d<125 && _toB.normalize().dot(_fwd)>.66){
         combat.bossHealth=Math.max(0,combat.bossHealth-38*dt);
-        combat.score+=12*dt; shadow.grp.scale.setScalar(1.06);
+        combat.hitUntil=gameTime+.09;combat.score+=12*dt; shadow.grp.scale.setScalar(1.06);
         if(combat.bossHealth<=0)winCombat();
       }
     }
   } else {
     fireLight.intensity = Math.max(0, fireLight.intensity - dt*14);
-    shadow.heat = Math.max(0, shadow.heat - dt*0.5);
   }
   for (let i=0;i<FIRE_N;i++){
     if (fire.life[i] <= 0) continue;
@@ -1188,10 +1298,12 @@ const elFireFill = document.getElementById('fireFill');
 const elStaminaFill = document.getElementById('staminaFill');
 const elStaggerFill = document.getElementById('staggerFill');
 const elTargetHint = document.getElementById('targetHint');
+const _screenTarget=new THREE.Vector3();
 function updateHUD() {
   const score=Math.floor(combat.score);
   document.getElementById('scoreText').textContent='SCORE '+String(score).padStart(6,'0');
-  document.getElementById('killText').textContent=combat.phase==='boss'?'FINAL BATTLE':'MISSION '+combat.mission+' · '+combat.missionKills+' / 2';
+  const currentGoal=MISSION_DEFS[Math.min(2,combat.mission-1)].goal;
+  document.getElementById('killText').textContent=combat.phase==='boss'?'FINAL BATTLE':'MISSION '+combat.mission+' · '+combat.missionKills+' / '+currentGoal+(combat.mission===1&&combat.mission1Rank?' · RANK '+combat.mission1Rank:'');
   document.getElementById('comboText').textContent=combat.combo>1?'COMBO x'+combat.combo:'';
   if(state.victory){elObjective.innerHTML='THE INFERNO IS VANQUISHED';elCompass.style.display='none';return;}
   const md=MISSION_DEFS[Math.min(2,combat.mission-1)];
@@ -1208,22 +1320,31 @@ function updateHUD() {
     const hp=target===shadow?combat.bossHealth:target.health, max=target===shadow?combat.bossMax:target.maxHealth;
     elTargetHint.textContent=(target.name||'INFERNO SOVEREIGN')+'  '+Math.max(0,Math.ceil(hp))+'/'+max+(inCone?' — FIRE!':' — '+Math.round(dist)+' m');
     elTargetHint.className=inCone?'gold urgent':'gold';
-    const marker=document.getElementById('lockMarker'),screen=p.clone().project(camera);
-    if(combat.lock&&screen.z<1){marker.style.display='block';marker.style.left=((screen.x*.5+.5)*innerWidth)+'px';marker.style.top=((-screen.y*.5+.5)*innerHeight)+'px';marker.className=inCone?'inRange':'';}else marker.style.display='none';
+    const marker=document.getElementById('lockMarker'),screen=_screenTarget.copy(p).project(camera);
+    const markerVisible=screen.z>=-1&&screen.z<=1&&Math.abs(screen.x)<=1&&Math.abs(screen.y)<=1;
+    if(combat.lock&&markerVisible){marker.style.display='block';marker.style.left=((screen.x*.5+.5)*innerWidth)+'px';marker.style.top=((-screen.y*.5+.5)*innerHeight)+'px';marker.className=inCone?'inRange':'';}else marker.style.display='none';
   }else{elCompass.style.display='none';elTargetHint.textContent='SEARCH THE SKIES';document.getElementById('lockMarker').style.display='none';}
+  const callers=combat.mission===1&&combat.phase==='mission'?enemies.slice(0,3).filter(e=>e.alive&&e.type==='SCOUT'):[];
+  const summon=Math.max(0,...callers.map(e=>e.summon));
+  const summonPanel=document.getElementById('summonPanel');summonPanel.style.display=summon>0?'block':'none';
+  document.getElementById('summonFill').style.width=summon+'%';
+  document.getElementById('hitMarker').style.opacity=gameTime<combat.hitUntil?'1':'0';
   const bossBar=document.getElementById('bossBar');bossBar.style.display=combat.phase==='boss'?'block':'none';
   document.getElementById('bossFill').style.width=Math.max(0,100*combat.bossHealth/combat.bossMax)+'%';
   const alt=Math.max(0,Math.round(state.pos.y-groundAt(state.pos.x,state.pos.z)));
   elFireFill.style.width=Math.round(state.fire)+'%';elStaminaFill.style.width=Math.round(state.stamina)+'%';elStaggerFill.style.width=Math.round(state.stagger)+'%';
-  elFlight.innerHTML=(state.landed?'PERCHED':Math.round(state.speed*2)+' fpm')+'<br>altitude '+alt+' m'+'<br>vigor '+'◆'.repeat(3-state.wounds)+'◇'.repeat(state.wounds)+'<br>'+fmtTime((performance.now()-state.startTime)/1000);
+  elFlight.innerHTML=(state.landed?'PERCHED':Math.round(state.speed*2)+' fpm')+'<br>altitude '+alt+' m'+'<br>vigor '+'◆'.repeat(3-state.wounds)+'◇'.repeat(state.wounds)+'<br>'+fmtTime(runElapsed());
 }
 
 // ---------- Main loop ----------
 const clock = new THREE.Clock();
+let gameTime = 0, hudAccumulator=0;
 function animate() {
   requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.05);
-  const t = clock.elapsedTime;
+  const frameDt = Math.min(clock.getDelta(), 0.05);
+  const dt = document.hidden ? 0 : frameDt;
+  if (state.started) gameTime += dt;
+  const t = gameTime;
 
   if (state.started && !state.landed && !state.fallen) {
     // steering
@@ -1347,8 +1468,8 @@ function animate() {
   // camera thrill: fov kick + shake on boost
   const boosting = state.started && !state.landed && !!(keys['ShiftLeft']||keys['ShiftRight']) && state.stamina > 1;
   const targetFov = boosting ? 84 : 72;
-  camera.fov += (targetFov - camera.fov) * 5*dt;
-  camera.updateProjectionMatrix();
+  const nextFov=camera.fov+(targetFov-camera.fov)*5*dt;
+  if(Math.abs(nextFov-camera.fov)>.001){camera.fov=nextFov;camera.updateProjectionMatrix();}
   const knockShake=state.fallen?.55:0;
   camera.position.x=(boosting?(Math.random()-.5)*.16:0)+(Math.random()-.5)*knockShake;
   camera.position.y=4.4+Math.sin(state.flap)*.10+(boosting?(Math.random()-.5)*.14:0)+(Math.random()-.5)*knockShake;
@@ -1356,13 +1477,6 @@ function animate() {
   // fire
   const firing = state.started && !state.landed && !state.fallen && !!keys['Space'] && state.fire > 1;
   updateFire(dt, firing);
-
-  // beacon flames flicker
-  for (const b of beacons) if (b.lit) {
-    const f = 1 + Math.sin(t*11 + b.pos.x)*0.18;
-    b.flame.scale.set(f, 1.25*f, f);
-    b.light.intensity = 2.4 + Math.sin(t*13 + b.pos.z)*0.7;
-  }
 
   // embers drift
   {
@@ -1388,7 +1502,7 @@ function animate() {
       state.yaw += (Math.random()-.5)*0.8;
       const fx = document.getElementById('chillFx');
       fx.style.opacity = 1;
-      setTimeout(() => fx.style.opacity = 0, 650);
+      scheduleUI(() => fx.style.opacity = 0, 650);
       chime([311.13, 293.66], 0.8, 0.18);
       woundPlayer('A COLD SPIRIT WOUNDS THY DRAKE');
     }
@@ -1402,14 +1516,14 @@ function animate() {
       rg.passed = true;
       rg.mesh.material.opacity = 0.12;
       state.speed = Math.min(150, state.speed + 40);
-      state.startTime += 2500; // reclaim 2.5 s from the run clock
+      state.timeCredit=Math.min(gameTime-state.startTime,state.timeCredit+2.5); // reclaim up to elapsed time
       showMessage('THE WIND QUICKENS', 1200);
       chime([1046.5, 1318.5], 0.35, 0.15);
     }
   }
 
   updateCombat(dt,t);
-  if(combat.phase==='boss')shadow.grp.scale.lerp(new THREE.Vector3(1,1,1),Math.min(1,dt*9));
+  if(combat.phase==='boss')shadow.grp.scale.lerp(_unitScale,Math.min(1,dt*9));
   updateShadow(dt, t);
 
   // fog and clouds drift on the wind
@@ -1432,7 +1546,7 @@ function animate() {
     lastFlapCyc = cyc;
   }
 
-  if (state.started) updateHUD();
+  if(state.started){hudAccumulator+=dt;if(hudAccumulator>=1/30){hudAccumulator%=1/30;updateHUD();}}
   composer.render();
 }
 animate();
@@ -1452,8 +1566,12 @@ window.GAME = {
   get kills(){ return combat.kills; },
   get combo(){ return combat.combo; },
   get bossHealth(){ return combat.bossHealth; },
-  state, combat, keys, rings, shadow, enemies, pickups, enemyFireballs,
-  nearestTarget, toggleLock, defeatEnemy, beginMission, spawnEnemyFire, woundPlayer, recoverFlight, activateBoss, winCombat, updateFire,
+  get gameTime(){return gameTime;},
+  get elapsed(){return runElapsed();},
+  get activeEnemyFireballs(){return enemyFireballs.filter(f=>f.active).length;},
+  state, combat, keys, rings, shadow, enemies, pickups, enemyFireballs, fire, sfire, scorch,
+  nearestTarget, toggleLock, defeatEnemy, beginMission, activateEnemyAt, ensureMission1Progress, spawnEnemyFire, woundPlayer, recoverFlight, activateBoss, winCombat, updateFire,
+  resetGame,clearEnemyFireballs,clearSovereignFire,clearPlayerParticles,resetBoss,updateCombat,updateShadow,
 };
 </script>
 </body>
